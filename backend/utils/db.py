@@ -1,78 +1,61 @@
 import sqlite3
 import json
+import os
 from typing import Dict, Any
 
-# open DB
-conn = sqlite3.connect("timeline.db", check_same_thread=False)
-conn.row_factory = sqlite3.Row
+DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "timeline.db")
+
+def get_conn():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def init_db():
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT,
-            type TEXT,
-            timestamp INTEGER,
-            content TEXT,
-            metadata TEXT
-        );
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS processed_events (
-            event_id INTEGER PRIMARY KEY
-        );
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            trigger_keyword TEXT,
-            action_json TEXT
-        );
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS events (
+        id TEXT PRIMARY KEY,
+        source TEXT,
+        type TEXT,
+        timestamp INTEGER,
+        content TEXT,
+        metadata TEXT
+    )
     """)
     conn.commit()
+    conn.close()
 
-init_db()
-
-async def save_event(event):
-    cur = conn.execute(
-        "INSERT INTO events (source, type, timestamp, content, metadata) VALUES (?, ?, ?, ?, ?)",
-        (
-            event.source,
-            event.type,
-            event.timestamp,
-            event.content,
-            json.dumps(event.metadata)
-        )
-    )
+def save_event(event: Dict[str, Any]) -> str:
+    """
+    event: dict with keys: id(optional), source, type, timestamp, content, metadata(dict)
+    returns id
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    evt_id = event.get("id") or f"evt_{event.get('timestamp','')}_{abs(hash(event.get('content','')))%1000000}"
+    metadata = json.dumps(event.get("metadata") or {})
+    cur.execute("""
+    INSERT OR REPLACE INTO events (id, source, type, timestamp, content, metadata)
+    VALUES (?, ?, ?, ?, ?, ?)
+    """, (evt_id, event.get("source"), event.get("type"), int(event.get("timestamp") or 0), event.get("content"), metadata))
     conn.commit()
-    return cur.lastrowid
+    conn.close()
+    return evt_id
 
-def get_unprocessed_events(limit: int = 100):
-    rows = conn.execute("""
-        SELECT e.* 
-        FROM events e
-        LEFT JOIN processed_events p ON e.id = p.event_id
-        WHERE p.event_id IS NULL
-        ORDER BY e.timestamp ASC
-        LIMIT ?
-    """, (limit,)).fetchall()
-    return [dict(row) for row in rows]
+def list_events(limit=1000, since_ts=0):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM events WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ?", (since_ts, limit))
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
-def mark_event_processed(event_id: int):
-    conn.execute(
-        "INSERT OR IGNORE INTO processed_events (event_id) VALUES (?)",
-        (event_id,)
-    )
-    conn.commit()
-
-def add_automation(name: str, trigger_keyword: str, action: Dict[str, Any]):
-    conn.execute(
-        "INSERT INTO automations (name, trigger_keyword, action_json) VALUES (?, ?, ?)",
-        (name, trigger_keyword, json.dumps(action))
-    )
-    conn.commit()
-
-def list_automations():
-    rows = conn.execute("SELECT * FROM automations").fetchall()
-    return [dict(row) for row in rows]
+def get_all_events():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM events ORDER BY timestamp ASC")
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

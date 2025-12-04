@@ -20,3 +20,7 @@ app.include_router(search_router)
 
 # MOATS ROUTER
 app.include_router(moats_router)
+
+# Vault (encrypted storage) router
+from backend.api.vault import router as vault_router
+app.include_router(vault_router)
